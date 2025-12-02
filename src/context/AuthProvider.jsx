@@ -1,17 +1,8 @@
 import { useState } from "react";
 import { AuthContext } from "./AuthContext";
+import { usersFromLS } from "../utils/usersFromLS";
 
 const AuthProvider = ({ children }) => {
-    const usersFromLS = () => {
-        try {
-            return window.localStorage.getItem("userInfo")
-                ? JSON.parse(window.localStorage.getItem("userInfo"))
-                : null;
-        } catch {
-            return null;
-        }
-    };
-
     const [user, setUser] = useState(usersFromLS());
 
     const updateUserInfo = (userData) => {
@@ -25,9 +16,7 @@ const AuthProvider = ({ children }) => {
     };
 
     const login = (userLogin) => {
-        console.log("userBefore", user);
         updateUserInfo(userLogin);
-        console.log("userAfter", user);
         return true;
     };
 
