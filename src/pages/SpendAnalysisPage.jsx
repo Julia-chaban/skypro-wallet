@@ -27,7 +27,7 @@ ChartJS.register(
 );
 
 // Сервис для работы с API транзакций
-const API_BASE_URL = "https://wedev-api.sky.pro/api/transactions";
+const API_BASE_URL = "https://wedev-api.sky.pro/api";
 
 const getAuthToken = () => {
   return localStorage.getItem("token");
@@ -48,7 +48,7 @@ const getTransactionsByPeriod = async (startDate, endDate) => {
       return `${month}-${day}-${year}`;
     };
 
-    const response = await fetch(`${API_BASE_URL}/period`, {
+    const response = await fetch(`${API_BASE_URL}/transactions/period`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -59,8 +59,14 @@ const getTransactionsByPeriod = async (startDate, endDate) => {
       }),
     });
 
+    if (response.status === 401) {
+      localStorage.removeItem("token");
+      throw new Error("Session expired");
+    }
+
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} - ${errorText}`);
     }
 
     return await response.json();
@@ -713,20 +719,46 @@ const SpendAnalysisPage = () => {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [showCalendar, setShowCalendar] = useState(false);
   const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const chartRef = useRef(null);
+  const navigate = useNavigate();
+
+  // Цвета для категорий
+  const backgroundColors = [
+    "#D9B6FF", // Еда
+    "#FFB53D", // Транспорт
+    "#6EE4FE", // Жилье
+    "#B0AEFF", // Развлечения
+    "#BCEC30", // Образование
+    "#FFB9B8", // Другое
+  ];
+
+  // Функция для нормализации даты (сбрасываем время)
+  const normalizeDate = (date) => {
+    const normalized = new Date(date);
+    normalized.setHours(0, 0, 0, 0);
+    return normalized;
+  };
 
   // Функция для загрузки транзакций за выбранный период
   const fetchTransactionsForPeriod = async (dates) => {
-    if (dates.length === 0) return;
+    if (dates.length === 0) {
+      setTransactions([]);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
       const datesToCalculate = getSelectedDays(dates);
-      if (datesToCalculate.length === 0) return;
+      if (datesToCalculate.length === 0) {
+        setTransactions([]);
+        setLoading(false);
+        return;
+      }
 
       // Находим минимальную и максимальную дату
       const sortedDates = [...datesToCalculate].sort((a, b) => a - b);
@@ -737,10 +769,26 @@ const SpendAnalysisPage = () => {
         startDate,
         endDate
       );
-      setTransactions(transactionsData);
+      setTransactions(transactionsData || []);
     } catch (err) {
       console.error("Failed to fetch transactions:", err);
-      setError("Ошибка при загрузке транзакций. Проверьте авторизацию.");
+
+      if (
+        err.message.includes("Session expired") ||
+        err.message.includes("401")
+      ) {
+        setError("Сессия истекла. Пожалуйста, войдите снова.");
+        localStorage.removeItem("token");
+        setTimeout(() => {
+          navigate("/login");
+        }, 2000);
+      } else {
+        setError(
+          "Ошибка при загрузке транзакций. Проверьте соединение и попробуйте снова."
+        );
+      }
+
+      setTransactions([]);
     } finally {
       setLoading(false);
     }
@@ -823,12 +871,14 @@ const SpendAnalysisPage = () => {
     };
 
     // Группируем транзакции по категориям
-    transactions.forEach((transaction) => {
-      const category = transaction.category;
-      if (categorySums.hasOwnProperty(category)) {
-        categorySums[category] += transaction.sum;
-      }
-    });
+    if (Array.isArray(transactions)) {
+      transactions.forEach((transaction) => {
+        const category = transaction.category;
+        if (categorySums.hasOwnProperty(category)) {
+          categorySums[category] += transaction.sum || 0;
+        }
+      });
+    }
 
     return {
       labels: [
@@ -862,21 +912,14 @@ const SpendAnalysisPage = () => {
 
   // Расчет общей суммы на основе реальных транзакций
   const calculateTotalAmount = () => {
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      return 0;
+    }
     return transactions.reduce(
-      (total, transaction) => total + transaction.sum,
+      (total, transaction) => total + (transaction.sum || 0),
       0
     );
   };
-
-  // Цвета для категорий
-  const backgroundColors = [
-    "#D9B6FF", // Еда
-    "#FFB53D", // Транспорт
-    "#6EE4FE", // Жилье
-    "#B0AEFF", // Развлечения
-    "#BCEC30", // Образование
-    "#FFB9B8", // Другое
-  ];
 
   // ВАЖНО: Вызываем функции расчета на каждом рендере
   const chartData = calculateChartData();
@@ -918,7 +961,12 @@ const SpendAnalysisPage = () => {
         display: false,
       },
       tooltip: {
-        enabled: false,
+        enabled: true,
+        callbacks: {
+          label: (context) => {
+            return `${context.label}: ${context.parsed.y.toLocaleString()} ₽`;
+          },
+        },
       },
     },
     scales: {
@@ -962,7 +1010,7 @@ const SpendAnalysisPage = () => {
     };
   }, [isMobile]);
 
-  // Эффект для загрузки данных при изменении выбранных дат
+  // Эффект для проверки авторизации и начальной загрузки
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
@@ -971,9 +1019,7 @@ const SpendAnalysisPage = () => {
       return;
     }
 
-    if (selectedDates.length > 0) {
-      fetchTransactionsForPeriod(selectedDates);
-    } else {
+    if (isInitialLoad) {
       // Установка дат по умолчанию при первом рендере
       const defaultDates = [
         new Date(2024, 6, 29),
@@ -985,8 +1031,24 @@ const SpendAnalysisPage = () => {
         new Date(2024, 7, 4),
       ];
       setSelectedDates(defaultDates);
+      setIsInitialLoad(false);
+
+      // Загружаем данные для дат по умолчанию
+      fetchTransactionsForPeriod(defaultDates);
     }
-  }, [selectedDates]);
+  }, [isInitialLoad]);
+
+  // Эффект для загрузки данных при изменении выбранных дат
+  useEffect(() => {
+    if (!isInitialLoad && selectedDates.length > 0) {
+      // Используем debounce для предотвращения множественных запросов
+      const timeoutId = setTimeout(() => {
+        fetchTransactionsForPeriod(selectedDates);
+      }, 500); // Увеличили задержку для лучшего UX
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [selectedDates, isInitialLoad]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1001,21 +1063,32 @@ const SpendAnalysisPage = () => {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // ИСПРАВЛЕННАЯ ФУНКЦИЯ ВЫБОРА ДАТЫ
   const handleDateSelect = (date) => {
     setSelectedDates((prev) => {
-      const exists = prev.some((d) => d.getTime() === date.getTime());
+      const normalizedDate = normalizeDate(date);
+      const exists = prev.some(
+        (d) => normalizeDate(d).getTime() === normalizedDate.getTime()
+      );
 
       if (exists) {
-        const newDates = prev.filter((d) => d.getTime() !== date.getTime());
-        return newDates;
+        // Удаляем дату из выбранных - станет серой
+        return prev.filter(
+          (d) => normalizeDate(d).getTime() !== normalizedDate.getTime()
+        );
       } else {
-        return [...prev, date];
+        // Добавляем дату к выбранным - станет зеленой
+        return [...prev, normalizedDate];
       }
     });
   };
 
   const handleRetry = () => {
     fetchTransactionsForPeriod(selectedDates);
+  };
+
+  const handleLoginRedirect = () => {
+    navigate("/login");
   };
 
   const getSelectedPeriodText = () => {
@@ -1136,9 +1209,15 @@ const SpendAnalysisPage = () => {
               <STitle>Анализ расходов</STitle>
               <SErrorText>{error}</SErrorText>
               <div style={{ textAlign: "center", marginTop: "16px" }}>
-                <SRetryButton onClick={handleRetry}>
-                  Повторить попытку
-                </SRetryButton>
+                {error.includes("войдите") || error.includes("Сессия") ? (
+                  <SRetryButton onClick={handleLoginRedirect}>
+                    Войти в систему
+                  </SRetryButton>
+                ) : (
+                  <SRetryButton onClick={handleRetry}>
+                    Повторить попытку
+                  </SRetryButton>
+                )}
               </div>
             </SPageContainer>
           </SContainer>
