@@ -26,53 +26,59 @@ ChartJS.register(
 );
 
 // Сервис для работы с API транзакций
-const API_BASE_URL = "https://wedev-api.sky.pro/api/v2";
+const API_BASE_URL = "https://wedev-api.sky.pro/api";
 
-const getAuthToken = () => {
-  return localStorage.getItem("token");
-};
+// ВАШ ТОКЕН (вставлен из ответа API)
+const TEMP_TOKEN =
+  "cwb8cscwd0csb8co74b8dcasc4cgc0b854b0ccc46gcwb8cscw5g5k5o5s5w6g39k3bo3d03d43co3bc3e43c43k3983co3cc3e83bw3co3bc3b43d43bo3cc3e8";
 
 // Получить транзакции за период
 const getTransactionsByPeriod = async (startDate, endDate) => {
   try {
-    const token = getAuthToken();
-    if (!token) {
-      return getMockTransactions(startDate, endDate);
-    }
-
-    // Формат даты для API: MM-DD-YYYY (как в документации "6-1-2025")
+    // Формат даты для API: M-D-YYYY (как в документации: "6-1-2025")
     const formatDateForAPI = (date) => {
-      const month = String(date.getMonth() + 1);
-      const day = String(date.getDate());
+      const month = String(date.getMonth() + 1); // Без ведущих нулей
+      const day = String(date.getDate()); // Без ведущих нулей
       const year = date.getFullYear();
       return `${month}-${day}-${year}`;
     };
 
-    console.log("Запрос транзакций за период:", {
+    const requestData = {
       start: formatDateForAPI(startDate),
       end: formatDateForAPI(endDate),
-    });
+    };
+
+    console.log("📅 Запрос транзакций за период:", requestData);
+    console.log("🔑 Используем токен:", TEMP_TOKEN.substring(0, 20) + "...");
 
     const response = await fetch(`${API_BASE_URL}/transactions/period`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${TEMP_TOKEN}`,
+        // ВАЖНО: для этого API НЕ добавляем Content-Type!
       },
-      body: JSON.stringify({
-        start: formatDateForAPI(startDate),
-        end: formatDateForAPI(endDate),
-      }),
+      body: JSON.stringify(requestData),
     });
 
+    console.log("📊 Статус ответа API:", response.status, response.statusText);
+
+    if (response.status === 401) {
+      console.error("❌ Ошибка 401: Токен невалиден или просрочен");
+      return getMockTransactions(startDate, endDate);
+    }
+
     if (!response.ok) {
+      console.warn(
+        `❌ API вернул ошибку ${response.status}, используем моковые данные`
+      );
       return getMockTransactions(startDate, endDate);
     }
 
     const data = await response.json();
-    console.log("Получены транзакции от API:", data);
-    return data;
+    console.log("✅ Получены транзакции от API:", data.length || 0, "записей");
+    return data || [];
   } catch (error) {
-    console.warn("Ошибка при запросе к API, используем моковые данные:", error);
+    console.warn("❌ Ошибка сети, используем моковые данные:", error);
     return getMockTransactions(startDate, endDate);
   }
 };
@@ -233,7 +239,6 @@ const SCalendarGrid = styled.div`
   gap: 6px;
 `;
 
-// ИСПРАВЛЕНО: используем data-selected вместо $isSelected
 const SCalendarDay = styled.div`
   width: 40px;
   height: 40px;
@@ -298,7 +303,6 @@ const SMonthsGrid = styled.div`
   gap: 6px;
 `;
 
-// ИСПРАВЛЕНО: используем data-selected вместо $isSelected
 const SMonthButton = styled.div`
   width: 101px;
   height: 34px;
@@ -418,7 +422,6 @@ const SPeriodSwitcher = styled.div`
   gap: 12px;
 `;
 
-// ИСПРАВЛЕНО: используем data-active как строку
 const SPeriodButton = styled.button`
   background: transparent;
   border: none;
@@ -517,7 +520,7 @@ const getMockTransactions = (startDate, endDate) => {
     }
   });
 
-  console.log("Созданы моковые транзакции:", transactions.length);
+  console.log("📊 Созданы моковые транзакции:", transactions.length);
   return transactions;
 };
 
@@ -614,7 +617,7 @@ const YearCalendar = ({ selectedDates, onDateSelect }) => {
               return (
                 <SMonthButton
                   key={`${year}-${index}`}
-                  data-selected={isSelected ? "true" : "false"} // ИСПРАВЛЕНО
+                  data-selected={isSelected ? "true" : "false"}
                   onClick={() => handleMonthClick(year, index)}
                 >
                   {month}
@@ -691,7 +694,7 @@ const MonthCalendar = ({ selectedDates, onDateSelect }) => {
       days.push(
         <SCalendarDay
           key={day}
-          data-selected={isSelected ? "true" : "false"} // ИСПРАВЛЕНО
+          data-selected={isSelected ? "true" : "false"}
           onClick={() => handleDateClick(date)}
         >
           {day}
@@ -812,11 +815,24 @@ const SpendAnalysisPage = () => {
     setError(null);
 
     try {
-      // Пытаемся получить данные от API
+      console.log("🔄 Загрузка транзакций за период...");
+
+      // Получаем транзакции через API
       const apiTransactions = await getTransactionsByPeriod(startDate, endDate);
-      setTransactions(apiTransactions);
+
+      if (apiTransactions && Array.isArray(apiTransactions)) {
+        console.log(`✅ Получено ${apiTransactions.length} транзакций от API`);
+        setTransactions(apiTransactions);
+      } else {
+        console.log("⚠️  API вернул некорректные данные, используем моковые");
+        const mockTransactions = getMockTransactions(startDate, endDate);
+        setTransactions(mockTransactions);
+      }
     } catch (error) {
-      console.warn("Ошибка при получении данных:", error);
+      console.error("❌ Ошибка при получении данных:", error);
+      setError(
+        "Не удалось загрузить данные. Используем демонстрационные данные."
+      );
       // В случае ошибки используем моковые данные
       const mockTransactions = getMockTransactions(startDate, endDate);
       setTransactions(mockTransactions);
@@ -926,13 +942,18 @@ const SpendAnalysisPage = () => {
     };
   }, [isMobile]);
 
-  // Загружаем начальные данные
+  // Загружаем начальные данные при монтировании компонента
   useEffect(() => {
-    const today = new Date();
-    const monthAgo = new Date();
-    monthAgo.setMonth(today.getMonth() - 1);
+    const initializeData = async () => {
+      const today = new Date();
+      const monthAgo = new Date();
+      monthAgo.setMonth(today.getMonth() - 1);
 
-    fetchTransactionsForPeriod(monthAgo, today);
+      // Загружаем данные за последний месяц
+      fetchTransactionsForPeriod(monthAgo, today);
+    };
+
+    initializeData();
   }, []);
 
   // Эффект для обновления данных при изменении выбранных дат
@@ -1151,6 +1172,13 @@ const SpendAnalysisPage = () => {
                 <SChartWrapper>
                   {loading ? (
                     <SLoadingText>Загрузка данных...</SLoadingText>
+                  ) : error ? (
+                    <div>
+                      <SErrorText>{error}</SErrorText>
+                      <SRetryButton onClick={handleRetry}>
+                        Попробовать снова
+                      </SRetryButton>
+                    </div>
                   ) : (
                     <Bar
                       key={`mobile-${selectedDates.length}-${totalAmount}`}
@@ -1197,6 +1225,13 @@ const SpendAnalysisPage = () => {
                 <SChartWrapper>
                   {loading ? (
                     <SLoadingText>Загрузка данных...</SLoadingText>
+                  ) : error ? (
+                    <div>
+                      <SErrorText>{error}</SErrorText>
+                      <SRetryButton onClick={handleRetry}>
+                        Попробовать снова
+                      </SRetryButton>
+                    </div>
                   ) : (
                     <Bar
                       key={`desktop-${selectedDates.length}-${totalAmount}`}
